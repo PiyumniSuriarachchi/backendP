@@ -1,5 +1,6 @@
 # Import necessary modules
 import os
+import csv
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from functions.translations import translate_text
@@ -11,12 +12,53 @@ from functions.QuestionAnswering import answer_question
 app = Flask(__name__)
 CORS(app)  # Enable Cross-Origin Resource Sharing
 
+
 # Define upload folder
 UPLOAD_FOLDER = 'uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+USER_CREDENTIALS_FILE = 'user_credentials.csv'
 
 # Global variable to store the currently viewed PDF
 current_viewed_pdf = None
+
+
+# Endpoint for user sign up
+@app.route('/signup', methods=['POST'])
+def signup():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    # Check if username already exists
+    with open(USER_CREDENTIALS_FILE, 'r') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if row[0] == username:
+                return jsonify({'error': 'Username already exists'}), 400
+
+    # Append new user to the file
+    with open(USER_CREDENTIALS_FILE, 'a') as file:
+        writer = csv.writer(file)
+        writer.writerow([username, password])
+
+    return jsonify({'message': 'User registered successfully'})
+
+# Endpoint for user login
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    # Check if username and password match any entry in the file
+    with open(USER_CREDENTIALS_FILE, 'r') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if row[0] == username and row[1] == password:
+                return jsonify({'message': 'Login successful'})
+    
+    return jsonify({'error': 'Invalid username or password'}), 401
+
 
 # Endpoint for file upload
 @app.route('/upload', methods=['POST'])
