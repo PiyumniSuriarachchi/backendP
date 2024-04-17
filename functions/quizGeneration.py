@@ -5,16 +5,33 @@ import re
 import torch
 import nltk
 from nltk.corpus import stopwords
+import spacy
+
+# Load spaCy model for tokenization and part-of-speech tagging
+nlp = spacy.load("en_core_web_sm")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load the first model for question and answer generation
+# Load the QA model for question and answer generation
 qa_tokenizer = AutoTokenizer.from_pretrained("potsawee/t5-large-generation-squad-QuestionAnswer")
 qa_model = AutoModelForSeq2SeqLM.from_pretrained("potsawee/t5-large-generation-squad-QuestionAnswer")
 
 qa_model.to(device)
 
 nltk.download('stopwords')
+
+def generate_contextual_distractors(question, answer, context, num_distractors=2):
+    # Tokenize the context using spaCy
+    doc = nlp(context)
+    
+    # Extract nouns and verbs from the context
+    relevant_words = [token.text.lower() for token in doc if token.pos_ in ['NOUN', 'VERB'] and token.text.lower() not in [question.lower(), answer.lower()]]
+    
+    # Select a random subset of relevant words as distractors
+    distractors = random.sample(relevant_words, min(num_distractors, len(relevant_words)))
+    
+    # Combine question, answer, and distractors
+    return [question, answer] + distractors
 
 def generate_unique_distractors(question, answer, context, num_distractors=2):
     # Tokenize the context into words and remove stopwords
@@ -33,9 +50,6 @@ def generate_unique_distractors(question, answer, context, num_distractors=2):
 
     # Combine question, answer, and distractors
     return [question, answer] + unique_distractors
-
-
-
 
 def extract_paragraphs(context, min_length=10):
     # Split the text into paragraphs
@@ -85,8 +99,8 @@ def generate_quiz(context, max_retries=3):
 
             # Check if the generated question and answer are valid
             if question != "Error: Unable to generate question" and correct_answer != "Error: Unable to generate answer":
-                # Generate distractors
-                distractors = generate_unique_distractors(question, correct_answer, context)
+                # Generate contextual distractors
+                distractors = generate_contextual_distractors(question, correct_answer, context)
 
                 # Shuffle options
                 random.shuffle(distractors)
@@ -103,8 +117,6 @@ def generate_quiz(context, max_retries=3):
 
     # If all retries fail, return default values or placeholders
     return "Error: Unable to generate question", [], "Error: Unable to generate answer"
-
-
 
 def extract_text_without_header_footer(page, top_percentage=10, bottom_percentage=10):
     # Calculate the crop values based on percentages
@@ -146,17 +158,3 @@ def process_pdf(file_path, max_retries=3):
     # If all retries fail, return default values or placeholders
     print("Max retries reached. Unable to generate question and answer.")
     return "Error: Unable to generate question", "Error: Unable to generate options", "Error: Unable to generate answer"
-
-
-# Provide the path to your PDF file
-# pdf_path = None
-
-# Generate quiz
-# question, options, correct_answer = process_pdf(pdf_path)
-
-# Print quiz details
-# print("\nQuestion:", question)
-# print("Options:", options)
-# print("Correct Answer:", correct_answer)
-
-
