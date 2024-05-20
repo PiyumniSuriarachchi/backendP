@@ -119,7 +119,7 @@ def process_pdf(file_path, max_retries=3):
             random_page = pdf.pages[random_page_index]
 
             page_text = extract_text_without_header_footer(random_page)
-
+            print("THIS IS WORKIN")
             result = generate_quiz(page_text)
 
             if result[0] != "Error: Unable to generate question" and result[2] != "Error: Unable to generate answer":
