@@ -8,6 +8,7 @@ from nltk.corpus import stopwords
 import spacy
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+from torch.utils.data import DataLoader, TensorDataset
 
 # Load spaCy model for tokenization and part-of-speech tagging
 nlp = spacy.load("en_core_web_sm")
@@ -17,19 +18,29 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Load the QA model for question and answer generation
 qa_tokenizer = AutoTokenizer.from_pretrained("potsawee/t5-large-generation-squad-QuestionAnswer")
 qa_model = AutoModelForSeq2SeqLM.from_pretrained("potsawee/t5-large-generation-squad-QuestionAnswer")
-
 qa_model.to(device)
 
 # Load BERT model and tokenizer for generating distractors
 bert_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 bert_model = BertModel.from_pretrained('bert-base-uncased')
+bert_model.to(device)
 
 nltk.download('stopwords')
 
-def get_bert_embedding(text):
-    inputs = bert_tokenizer(text, return_tensors="pt", max_length=512, truncation=True)
-    outputs = bert_model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1).detach().numpy()
+def get_bert_embedding(text, batch_size=8):
+    inputs = bert_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    dataset = TensorDataset(inputs['input_ids'], inputs['attention_mask'])
+    dataloader = DataLoader(dataset, batch_size=batch_size)
+
+    embeddings = []
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids, attention_mask = [tensor.to(device) for tensor in batch]
+            outputs = bert_model(input_ids=input_ids, attention_mask=attention_mask)
+            batch_embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy()
+            embeddings.append(batch_embeddings)
+    
+    return np.vstack(embeddings)
 
 def generate_semantic_distractors(answer, context, num_distractors=2):
     # Tokenize the context using spaCy
@@ -38,18 +49,23 @@ def generate_semantic_distractors(answer, context, num_distractors=2):
     # Extract unique words from the context
     words = list(set([token.text.lower() for token in doc if token.is_alpha and token.text.lower() != answer.lower()]))
     
-    # Get the BERT embedding for the answer
-    answer_embedding = get_bert_embedding(answer)
+    if not words:
+        return []
     
-    # Calculate cosine similarities
-    word_embeddings = np.array([get_bert_embedding(word) for word in words])
+    # Get the BERT embedding for the answer
+    answer_embedding = get_bert_embedding([answer])[0].reshape(1, -1)
+    
+    # Get embeddings for words in batches
+    word_embeddings = get_bert_embedding(words)
+    
+    # Calculate similarities
     similarities = cosine_similarity(answer_embedding, word_embeddings).flatten()
     
     # Sort words by similarity and select top distractors
-    sorted_indices = similarities.argsort()
+    sorted_indices = similarities.argsort()[::-1]
     distractors = [words[i] for i in sorted_indices[:num_distractors]]
     
-    return distractors
+    return list(set(distractors))  # Ensure distractors are unique
 
 def extract_paragraphs(context, min_length=10):
     # Split the text into paragraphs
@@ -68,7 +84,7 @@ def generate_question_answer(context, max_retries=1, min_length=5, max_length=10
             if qa_tokenizer.sep_token in question_answer:
                 question, answer = question_answer.split(qa_tokenizer.sep_token, 1)
                 if min_length <= len(question) <= max_length and min_length <= len(answer) <= max_length:
-                    return question, answer
+                    return question.strip(), answer.strip()
         except ValueError:
             pass
 
@@ -89,10 +105,9 @@ def generate_quiz(context, max_retries=3):
             if question != "Error: Unable to generate question" and correct_answer != "Error: Unable to generate answer":
                 distractors = generate_semantic_distractors(correct_answer, context)
 
+                # Ensure the correct answer is included and unique
+                distractors = list(set(distractors + [correct_answer.lower()]))
                 random.shuffle(distractors)
-
-                if correct_answer not in distractors:
-                    distractors.append(correct_answer)
 
                 return question, distractors, correct_answer
 
@@ -119,7 +134,7 @@ def process_pdf(file_path, max_retries=3):
             random_page = pdf.pages[random_page_index]
 
             page_text = extract_text_without_header_footer(random_page)
-            print("THIS IS WORKIN")
+
             result = generate_quiz(page_text)
 
             if result[0] != "Error: Unable to generate question" and result[2] != "Error: Unable to generate answer":
